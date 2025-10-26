@@ -4,30 +4,27 @@ import { useEffect, useState } from "react";
 import api from "../../api/api";
 import { motion } from "framer-motion";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 
 export default function CartPage() {
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const router = useRouter();
 
   // Fungsi untuk mendapatkan URL gambar
   const getImageUrl = (imagePath: string) => {
     if (!imagePath) return "/images/placeholder.jpg";
-
-    if (imagePath.startsWith("http")) {
-      return imagePath;
-    }
-
-    if (imagePath.startsWith("storage/")) {
+    if (imagePath.startsWith("http")) return imagePath;
+    if (imagePath.startsWith("storage/"))
       return `http://127.0.0.1:8000/${imagePath}`;
-    }
-
     return `http://127.0.0.1:8000/storage/${imagePath}`;
   };
 
+  // Ambil data cart dari backend
   const fetchCart = async () => {
     try {
       const token = localStorage.getItem("token");
-      const res = await api.get("/cart", {
+      const res = await api.get("http://127.0.0.1:8000/api/cart", {
         headers: { Authorization: `Bearer ${token}` },
       });
       setCart(res.data);
@@ -38,24 +35,54 @@ export default function CartPage() {
     }
   };
 
+  // Fungsi checkout dengan Midtrans Snap
   const handleCheckout = async () => {
     try {
       const token = localStorage.getItem("token");
-      await api.post(
-        "/orders",
+
+      // Minta snap_token dari backend
+      const res = await api.post(
+        "http://127.0.0.1:8000/api/midtrans/checkout",
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      alert("Pesanan berhasil dibuat!");
-      fetchCart();
-      // Trigger cart update di navbar
-      window.dispatchEvent(new Event("cartChange"));
+
+      const { snap_token } = res.data;
+
+      if (window.snap) {
+        window.snap.pay(snap_token, {
+          onSuccess: function (result: any) {
+            alert("Pembayaran sukses!");
+            console.log("success:", result);
+            fetchCart();
+            window.dispatchEvent(new Event("cartChange"));
+            router.push("/pages/payment/success"); // ✅ FIX: /pages/
+          },
+          onPending: function (result: any) {
+            alert("Menunggu pembayaran...");
+            console.log("pending:", result);
+            router.push("/pages/payment/pending"); // ✅ FIX: /pages/
+          },
+          onError: function (result: any) {
+            alert("Terjadi kesalahan saat pembayaran");
+            console.log("error:", result);
+            router.push("/pages/payment/failed"); // ✅ FIX: /pages/
+          },
+          onClose: function () {
+            alert("Kamu menutup popup pembayaran sebelum selesai.");
+            router.push("/pages/payment/pending"); // ✅ FIX: /pages/
+          },
+        });
+      } else {
+        alert("Midtrans Snap belum siap!");
+      }
     } catch (error) {
       console.error("Error during checkout:", error);
       alert("Terjadi kesalahan saat checkout");
     }
   };
 
+  // Fungsi hapus item
   const handleRemove = async (id: number) => {
     try {
       const token = localStorage.getItem("token");
@@ -63,7 +90,6 @@ export default function CartPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       fetchCart();
-      // Trigger cart update di navbar
       window.dispatchEvent(new Event("cartChange"));
     } catch (error) {
       console.error("Error removing item:", error);
@@ -71,9 +97,9 @@ export default function CartPage() {
     }
   };
 
+  // Ubah jumlah quantity
   const handleQuantityChange = async (id: number, newQuantity: number) => {
     if (newQuantity < 1) return;
-
     try {
       const token = localStorage.getItem("token");
       await api.put(
@@ -88,17 +114,32 @@ export default function CartPage() {
     }
   };
 
-  // Calculate total
+  // Hitung total
   const calculateTotal = () => {
     return cart.reduce((total: number, item: any) => {
       return total + item.product.price * item.quantity;
     }, 0);
   };
 
+  // Load cart & Midtrans script
   useEffect(() => {
     fetchCart();
+
+    // Tambahkan script Snap Midtrans ke halaman
+    const script = document.createElement("script");
+    script.src = "https://app.sandbox.midtrans.com/snap/snap.js";
+    script.setAttribute(
+      "data-client-key",
+      "SB-Mid-client-xxxxxxxxxxxxxxxx" // Ganti dengan CLIENT_KEY kamu
+    );
+    document.body.appendChild(script);
+
+    return () => {
+      document.body.removeChild(script);
+    };
   }, []);
 
+  // UI loading
   if (loading) {
     return (
       <div className="min-h-screen bg-white pt-20">
@@ -111,6 +152,7 @@ export default function CartPage() {
     );
   }
 
+  // UI cart
   return (
     <div className="min-h-screen bg-white pt-20 font-poppins">
       <div className="max-w-6xl mx-auto px-6 py-8">
@@ -171,7 +213,6 @@ export default function CartPage() {
                     transition={{ duration: 0.5, delay: index * 0.1 }}
                     className="flex items-center p-6 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 transition-colors"
                   >
-                    {/* Product Image */}
                     <div className="w-20 h-20 bg-gray-100 rounded-xl flex items-center justify-center mr-6 flex-shrink-0">
                       {item.product.image ? (
                         <Image
@@ -186,7 +227,6 @@ export default function CartPage() {
                       )}
                     </div>
 
-                    {/* Product Info */}
                     <div className="flex-1">
                       <h3 className="font-bold text-lg mb-1 text-black">
                         {item.product.name}
@@ -195,7 +235,6 @@ export default function CartPage() {
                         Rp {Number(item.product.price).toLocaleString("id-ID")}
                       </p>
 
-                      {/* Quantity Controls */}
                       <div className="flex items-center space-x-3">
                         <motion.button
                           whileHover={{ scale: 1.1 }}
@@ -223,7 +262,6 @@ export default function CartPage() {
                       </div>
                     </div>
 
-                    {/* Subtotal & Remove */}
                     <div className="text-right">
                       <p className="font-bold text-lg mb-2 text-black">
                         Rp{" "}

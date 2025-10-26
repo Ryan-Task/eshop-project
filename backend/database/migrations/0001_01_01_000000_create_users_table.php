@@ -18,6 +18,8 @@ return new class extends Migration
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
+            $table->boolean('is_verified')->default(false); // ← Tambahan kolom status verifikasi
+            $table->string('verification_code')->nullable(); // ← Tambahan kolom kode verifikasi
             $table->rememberToken();
             $table->timestamps();
         });

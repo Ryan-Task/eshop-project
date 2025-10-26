@@ -15,10 +15,30 @@ export default function DefaultNavbar() {
     setIsMounted(true);
   }, []);
 
-  // Fungsi untuk update login status
+  // Fungsi untuk update login status (hanya aktif jika user sudah verifikasi)
   const updateLoginStatus = () => {
     const token = localStorage.getItem("token");
-    setIsLoggedIn(!!token);
+    const userData = localStorage.getItem("user");
+
+    if (!token || !userData) {
+      setIsLoggedIn(false);
+      return;
+    }
+
+    try {
+      const user = JSON.parse(userData);
+
+      // Jika belum verifikasi, jangan dianggap login
+      if (!user.email_verified_at) {
+        setIsLoggedIn(false);
+        return;
+      }
+
+      setIsLoggedIn(true);
+    } catch (error) {
+      console.error("Error parsing user data:", error);
+      setIsLoggedIn(false);
+    }
   };
 
   // Fungsi untuk update cart count dari localStorage
@@ -64,41 +84,35 @@ export default function DefaultNavbar() {
         );
         setCartItemsCount(count);
 
-        // Simpan ke localStorage untuk konsistensi
         localStorage.setItem("cart", JSON.stringify(cartData));
       }
     } catch (error) {
       console.error("Error fetching cart from API:", error);
-      // Fallback ke localStorage jika API gagal
       updateCartCount();
     }
   };
 
-  // Cek apakah sudah login dan get cart count
+  // Cek login + cart saat komponen mount
   useEffect(() => {
     if (!isMounted) return;
 
     updateLoginStatus();
     updateCartCountFromAPI();
 
-    // Event listener untuk perubahan di localStorage
     const handleStorageChange = () => {
       updateLoginStatus();
       updateCartCount();
     };
 
-    // Event listener untuk custom events
     const handleCartChange = () => {
       updateCartCountFromAPI();
     };
 
-    // Listen untuk berbagai event
     window.addEventListener("storage", handleStorageChange);
     window.addEventListener("authChange", handleStorageChange);
     window.addEventListener("cartChange", handleCartChange);
     window.addEventListener("cartUpdate", handleCartChange);
 
-    // Polling untuk perubahan (fallback)
     const interval = setInterval(() => {
       updateLoginStatus();
       updateCartCount();
@@ -115,12 +129,12 @@ export default function DefaultNavbar() {
 
   const handleLogout = () => {
     localStorage.removeItem("token");
+    localStorage.removeItem("user");
     localStorage.removeItem("cart");
     alert("Berhasil logout!");
     setIsLoggedIn(false);
     setCartItemsCount(0);
 
-    // Trigger events untuk sync semua komponen
     window.dispatchEvent(new Event("storage"));
     window.dispatchEvent(new Event("authChange"));
     window.dispatchEvent(new Event("cartChange"));
@@ -151,12 +165,6 @@ export default function DefaultNavbar() {
     router.push("/pages/profile");
   };
 
-  // Function untuk manual trigger cart update (bisa dipanggil dari komponen lain)
-  const triggerCartUpdate = () => {
-    window.dispatchEvent(new Event("cartUpdate"));
-  };
-
-  // Prevent hydration mismatch
   if (!isMounted) {
     return (
       <nav className="fixed top-0 left-0 right-0 z-50 bg-white shadow-md">
@@ -193,12 +201,12 @@ export default function DefaultNavbar() {
             </span>
           </motion.div>
 
-          {/* Navigation Links */}
+          {/* Links */}
           <div className="hidden md:flex items-center space-x-8">
             <motion.button
               whileHover={{ y: -2 }}
               whileTap={{ y: 0 }}
-              className="font-semibold text-gray-700 hover:text-black transition-colors"
+              className="font-semibold text-gray-700 hover:text-black"
               onClick={() => router.push("/#products")}
             >
               Products
@@ -206,28 +214,28 @@ export default function DefaultNavbar() {
             <motion.button
               whileHover={{ y: -2 }}
               whileTap={{ y: 0 }}
-              className="font-semibold text-gray-700 hover:text-black transition-colors"
-              onClick={() => router.push("/#about")}
+              className="font-semibold text-gray-700 hover:text-black"
+              onClick={() => router.push("/pages/about")}
             >
               About
             </motion.button>
             <motion.button
               whileHover={{ y: -2 }}
               whileTap={{ y: 0 }}
-              className="font-semibold text-gray-700 hover:text-black transition-colors"
+              className="font-semibold text-gray-700 hover:text-black"
               onClick={() => router.push("/#contact")}
             >
               Contact
             </motion.button>
           </div>
 
-          {/* Auth Buttons & Cart */}
+          {/* Auth & Cart */}
           <div className="flex items-center space-x-4">
-            {/* Cart Icon with Badge */}
+            {/* Cart */}
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              className="relative p-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-all"
+              className="relative p-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700"
               onClick={handleCartClick}
             >
               <svg
@@ -243,8 +251,6 @@ export default function DefaultNavbar() {
                   d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"
                 />
               </svg>
-
-              {/* Cart Badge - Selalu tampilkan angka aktual */}
               {cartItemsCount > 0 && (
                 <motion.span
                   initial={{ scale: 0 }}
@@ -259,18 +265,18 @@ export default function DefaultNavbar() {
             {!isLoggedIn ? (
               <div className="flex items-center space-x-3">
                 <motion.button
-                  whileHover={{ scale: 1.05, y: -1 }}
-                  whileTap={{ scale: 0.95, y: 0 }}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={handleLogin}
-                  className="px-6 py-2 rounded-full font-semibold transition-all border border-gray-300 hover:border-black text-gray-700 hover:text-black bg-transparent"
+                  className="px-6 py-2 rounded-full font-semibold border border-gray-300 hover:border-black text-gray-700 hover:text-black"
                 >
                   Login
                 </motion.button>
                 <motion.button
-                  whileHover={{ scale: 1.05, y: -1 }}
-                  whileTap={{ scale: 0.95, y: 0 }}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={handleRegister}
-                  className="px-6 py-2 rounded-full font-semibold transition-all bg-black text-white hover:bg-gray-800 border border-black"
+                  className="px-6 py-2 rounded-full font-semibold bg-black text-white hover:bg-gray-800 border border-black"
                 >
                   Register
                 </motion.button>
@@ -280,7 +286,7 @@ export default function DefaultNavbar() {
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
-                  className="flex items-center space-x-2 p-2 rounded-lg transition-colors text-gray-700 hover:text-black"
+                  className="flex items-center space-x-2 p-2 text-gray-700 hover:text-black"
                   onClick={handleProfile}
                 >
                   <svg
@@ -302,52 +308,14 @@ export default function DefaultNavbar() {
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={handleLogout}
-                  className="px-4 py-2 rounded-full font-semibold transition-all border border-red-200 hover:border-red-300 text-red-500 hover:text-red-700 bg-transparent"
+                  className="px-4 py-2 rounded-full font-semibold border border-red-200 hover:border-red-300 text-red-500 hover:text-red-700"
                 >
-                  <span className="hidden sm:block">Logout</span>
-                  <span className="sm:hidden">
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                      />
-                    </svg>
-                  </span>
+                  Logout
                 </motion.button>
               </div>
             )}
           </div>
         </div>
-      </div>
-
-      {/* Mobile Menu Button */}
-      <div className="md:hidden absolute top-4 right-4">
-        <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
-        >
-          <svg
-            className="w-6 h-6"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M4 6h16M4 12h16M4 18h16"
-            />
-          </svg>
-        </motion.button>
       </div>
     </motion.nav>
   );

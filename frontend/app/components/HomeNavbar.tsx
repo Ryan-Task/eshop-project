@@ -39,7 +39,14 @@ export default function HomeNavbar() {
   // Fungsi untuk update login status
   const updateLoginStatus = () => {
     const token = localStorage.getItem("token");
-    setIsLoggedIn(!!token);
+    const isVerified = localStorage.getItem("isVerified");
+
+    // Hanya dianggap login jika token ADA dan sudah diverifikasi
+    if (token && isVerified === "true") {
+      setIsLoggedIn(true);
+    } else {
+      setIsLoggedIn(false);
+    }
   };
 
   // Fungsi untuk update cart count dari localStorage
@@ -137,6 +144,7 @@ export default function HomeNavbar() {
   const handleLogout = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("cart");
+    localStorage.removeItem("isVerified");
     alert("Berhasil logout!");
     setIsLoggedIn(false);
     setCartItemsCount(0);
@@ -152,8 +160,10 @@ export default function HomeNavbar() {
 
   const handleCartClick = () => {
     const token = localStorage.getItem("token");
-    if (!token) {
-      alert("Silakan login terlebih dahulu untuk melihat keranjang!");
+    const isVerified = localStorage.getItem("isVerified");
+
+    if (!token || isVerified !== "true") {
+      alert("Silakan login dan verifikasi akun terlebih dahulu!");
       router.push("/pages/auth/login");
       return;
     }
@@ -251,12 +261,7 @@ export default function HomeNavbar() {
                   ? "text-gray-700 hover:text-black"
                   : "text-white/90 hover:text-white"
               }`}
-              onClick={() => {
-                const aboutSection = document.getElementById("about");
-                if (aboutSection) {
-                  aboutSection.scrollIntoView({ behavior: "smooth" });
-                }
-              }}
+              onClick={() => router.push("/pages/about")}
             >
               About
             </motion.button>
@@ -306,7 +311,7 @@ export default function HomeNavbar() {
                 />
               </svg>
 
-              {/* Cart Badge - Selalu tampilkan angka aktual */}
+              {/* Cart Badge */}
               {cartItemsCount > 0 && (
                 <motion.span
                   initial={{ scale: 0 }}

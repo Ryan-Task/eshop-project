@@ -98,6 +98,66 @@ export default function HomePage() {
     fetchProducts();
   }, []);
 
+  // ===== NEW: handle token from redirect (Google OAuth) =====
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (!token) return;
+
+    // store token immediately
+    try {
+      localStorage.setItem("token", token);
+    } catch (e) {
+      console.error("Failed to store token:", e);
+    }
+
+    // call backend to verify token and fetch user data
+    (async () => {
+      try {
+        const res = await axios.get("http://127.0.0.1:8000/api/verify-token", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+          },
+        });
+
+        const user = res.data?.user ?? null;
+        if (user) {
+          try {
+            localStorage.setItem("user", JSON.stringify(user));
+            // set isVerified flag for HomeNavbar usage
+            localStorage.setItem(
+              "isVerified",
+              user.is_verified ? "true" : "false"
+            );
+          } catch (e) {
+            console.error("Failed to store user in localStorage:", e);
+          }
+        } else {
+          // if no user returned, clear stored user/isVerified
+          localStorage.removeItem("user");
+          localStorage.setItem("isVerified", "false");
+        }
+
+        // notify other components (navbars) to recheck auth status
+        window.dispatchEvent(new Event("storage"));
+        window.dispatchEvent(new Event("authChange"));
+      } catch (err) {
+        console.error("verify-token failed:", err);
+        // keep token stored but mark not verified
+        localStorage.setItem("isVerified", "false");
+      } finally {
+        // remove token from url to keep clean UI without reloading
+        const cleanUrl =
+          window.location.origin +
+          window.location.pathname +
+          window.location.hash;
+        history.replaceState(null, "", cleanUrl);
+      }
+    })();
+  }, []);
+
   const handleAddToCart = async (product: any) => {
     try {
       const token = localStorage.getItem("token");

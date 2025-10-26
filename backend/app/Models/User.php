@@ -15,11 +15,17 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
+        'is_verified',
+        'verification_code',
+        'email_verified_at'
+
     ];
 
     protected $hidden = [
         'password',
         'remember_token',
+        'verification_code',
+
     ];
 
     public function cart()
