@@ -36,6 +36,29 @@ class MidtransController extends Controller
             ], 422);
         }
 
+        // ⛔ Validasi alamat hanya untuk checkout baru (bukan re-pay)
+        if (!$request->filled('order_id')) {
+            $addressRaw = $user->address ?? null;
+            $valid = false;
+            if (is_array($addressRaw)) {
+                $a = $addressRaw;
+            } else {
+                $a = json_decode((string) $addressRaw, true);
+            }
+            if (is_array($a)) {
+                $valid = !empty($a['province']) && !empty($a['regency']) && !empty($a['district']) && !empty($a['detail']);
+            } else {
+                // jika format lama berupa string biasa, anggap valid jika tidak kosong
+                $valid = !empty($addressRaw);
+            }
+            if (!$valid) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Lengkapi alamat pengiriman pada profil terlebih dahulu.',
+                ], 422);
+            }
+        }
+
         // ✅ Re-pay flow: gunakan order yang sudah ada (status pending)
         if ($request->filled('order_id')) {
             try {
@@ -150,7 +173,7 @@ class MidtransController extends Controller
 
         try {
             // Jalankan dalam transaksi agar rollback jika gagal mendapatkan Snap Token
-            [$order, $snapToken] = DB::transaction(function () use ($user, $cartItems) {
+            [$order, $snapToken] = DB::transaction(function () use ($user, $request, $cartItems) {
                 $total = 0;
                 $itemDetails = [];
 
@@ -167,13 +190,28 @@ class MidtransController extends Controller
                     ];
                 }
 
+                // NEW: Shipping (optional) dari request
+                $shippingCost = (int) $request->input('shipping_cost', 0);
+                $shippingMethod = $request->input('shipping_method');
+                $buyerNote = $request->input('buyer_note');
+
+                if ($shippingCost > 0) {
+                    $itemDetails[] = [
+                        'id' => 'SHIPPING',
+                        'price' => $shippingCost,
+                        'quantity' => 1,
+                        'name' => 'Biaya Pengiriman',
+                    ];
+                    $total += $shippingCost;
+                }
+
                 if ($total <= 0) {
                     throw new \RuntimeException('Total pesanan tidak valid.');
                 }
 
                 $order = Order::create([
                     'user_id' => $user->id,
-                    'total_price' => $total,
+                    'total_price' => $total, // sudah termasuk ongkir bila ada
                     'status' => 'pending',
                 ]);
 
@@ -186,6 +224,15 @@ class MidtransController extends Controller
                     ]);
                 }
 
+                // Simpan catatan pengiriman awal (metode + catatan pembeli) ke shipping_note
+                if ($shippingMethod || $buyerNote) {
+                    $noteParts = [];
+                    if ($shippingMethod) $noteParts[] = 'Metode: ' . $shippingMethod;
+                    if ($buyerNote) $noteParts[] = 'Catatan: ' . $buyerNote;
+                    $order->shipping_note = implode(' | ', $noteParts);
+                    $order->save();
+                }
+
                 $params = [
                     'transaction_details' => [
                         'order_id' => 'ORDER-' . $order->id,
@@ -196,7 +243,6 @@ class MidtransController extends Controller
                         'email' => $user->email,
                     ],
                     'item_details' => $itemDetails,
-                    // ✅ Tambahkan BCA VA dan DANA untuk simulasi
                     'enabled_payments' => [
                         'bca_va',      // BCA Virtual Account (simulasi)
                         'dana',        // DANA E-Wallet (simulasi)

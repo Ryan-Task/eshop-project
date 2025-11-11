@@ -8,142 +8,167 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\InvalidStateException;
 use Illuminate\Database\QueryException;
 use Throwable;
 use App\Models\User;
+use Illuminate\Support\Facades\Http;
 
 class AuthController extends Controller
 {
     // ====================== REGISTER ======================
     public function register(Request $request)
     {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|string|email',
-            'password' => 'required|string|min:6',
+        // UBAH: validasi name agar hanya huruf + spasi
+        $data = $request->validate([
+            'name' => ['required','regex:/^[A-Za-z\s]+$/u','min:2','max:100'],
+            'email' => 'required|email|unique:users,email',
+            'password' => 'required|string|min:8|confirmed',
+            'captcha_token' => 'required',
         ]);
 
-        $existingUser = User::where('email', $request->email)->first();
-
-        if ($existingUser && $existingUser->is_verified) {
-            return response()->json(['message' => 'Email sudah terdaftar dan diverifikasi'], 422);
+        // NEW: verify captcha (tetap panggil helper kalau sudah ada)
+        if (method_exists($this,'verifyCaptcha') && !$this->verifyCaptcha($request)) {
+            return response()->json(['message' => 'Captcha tidak valid.'], 422);
         }
 
-        if ($existingUser && !$existingUser->is_verified) {
-            $verificationCode = rand(100000, 999999);
-            $existingUser->update([
-                'name' => $request->name,
-                'password' => Hash::make($request->password),
-                'verification_code' => $verificationCode,
-                'is_verified' => false,
-            ]);
+        // Generate OTP
+        $otp = (string) random_int(100000, 999999);
 
-            try {
-                Mail::raw("Kode verifikasi akun Anda adalah: {$verificationCode}", function ($message) use ($existingUser) {
-                    $message->to($existingUser->email)
-                            ->subject('Kode Verifikasi Akun Anda');
-                });
-            } catch (\Exception $e) {
-                return response()->json([
-                    'message' => 'Gagal mengirim email verifikasi',
-                    'error' => $e->getMessage()
-                ], 500);
-            }
-
-            return response()->json([
-                'message' => 'Email sudah terdaftar tapi belum diverifikasi. Kode baru dikirim ke email Anda.',
-                'user' => $existingUser,
-            ]);
-        }
-
-        // Buat user baru dan langsung login otomatis
-        $verificationCode = rand(100000, 999999);
-
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-            'role' => 'user',
-            'verification_code' => $verificationCode,
-            'is_verified' => true,
-            'email_verified_at' => now(),
+        $user = \App\Models\User::create([
+            'name' => $data['name'],
+            'email' => $data['email'],
+            'password' => bcrypt($data['password']),
+            'verification_code' => $otp,
+            'is_verified' => false,
         ]);
 
+        // Kirim email OTP (text sederhana)
         try {
-            Mail::raw("Selamat datang, {$user->name}! Akun Anda telah berhasil dibuat.", function ($message) use ($user) {
-                $message->to($user->email)->subject('Selamat Datang di Website Kami');
-            });
-        } catch (\Exception $e) {
-            // Abaikan jika gagal kirim email sambutan
+            Mail::raw(
+                "Halo {$user->name},\n\nKode verifikasi akun kamu: {$otp}\nMasukkan kode ini di halaman verifikasi untuk mengaktifkan akun.\n\nTerima kasih,\nTechStore",
+                function ($m) use ($user) {
+                    $m->to($user->email)->subject('Kode Verifikasi TechStore');
+                }
+            );
+        } catch (\Throwable $e) {
+            // log tapi tetap lanjut
+            \Log::error('Mail OTP gagal: '.$e->getMessage());
         }
-
-        $token = $user->createToken('api_token')->plainTextToken;
 
         return response()->json([
-            'message' => 'Registrasi berhasil dan login otomatis.',
-            'user' => $user,
-            'token' => $token,
-        ]);
+            'message' => 'Registrasi berhasil. Kode OTP telah dikirim ke email.',
+            'user_id' => $user->id,
+        ], 201);
     }
 
     // ====================== VERIFIKASI EMAIL ======================
     public function verify(Request $request)
     {
+        // Terima salah satu: code atau verification_code
         $request->validate([
             'email' => 'required|email',
-            'verification_code' => 'required'
+            'code' => 'required_without:verification_code|string|nullable',
+            'verification_code' => 'required_without:code|string|nullable',
         ]);
 
-        $user = User::where('email', $request->email)
-                    ->where('verification_code', $request->verification_code)
-                    ->first();
+        $email = (string) $request->input('email');
+        $code  = $request->input('code', $request->input('verification_code')); // FIX: dukung keduanya
 
+        $user = \App\Models\User::where('email', $email)->first();
         if (!$user) {
-            return response()->json(['message' => 'Kode verifikasi salah atau email tidak ditemukan'], 400);
+            return response()->json(['message' => 'Email tidak ditemukan'], 404);
+        }
+        if ($user->is_verified) {
+            return response()->json(['message' => 'Akun sudah terverifikasi']);
+        }
+        if (!$code || $user->verification_code !== (string) $code) {
+            return response()->json(['message' => 'Kode verifikasi salah'], 422);
         }
 
-        $user->update([
-            'is_verified' => true,
-            'email_verified_at' => now(),
-            'verification_code' => null
-        ]);
+        $user->is_verified = true;
+        $user->email_verified_at = now();
+        $user->verification_code = null;
+        $user->save();
 
-        $token = $user->createToken('api_token')->plainTextToken;
+        // NEW: otomatis login setelah verifikasi
+        $token = $user->createToken('auth')->plainTextToken;
 
         return response()->json([
-            'message' => 'Email berhasil diverifikasi dan login otomatis.',
-            'user' => $user,
+            'message' => 'Verifikasi berhasil',
             'token' => $token,
+            'user' => $user, // hidden fields tetap disembunyikan oleh model
         ]);
     }
 
     // ====================== LOGIN MANUAL ======================
     public function login(Request $request)
     {
-        $request->validate([
+        // UBAH: captcha_token optional
+        $data = $request->validate([
             'email' => 'required|email',
             'password' => 'required|string',
+            'captcha_token' => 'sometimes|nullable|string',
         ]);
 
-        if (!Auth::attempt($request->only('email', 'password'))) {
-            return response()->json(['message' => 'Email atau password salah'], 401);
+        // Ambil user dulu untuk cek role
+        $user = \App\Models\User::where('email', $data['email'])->first();
+        $isAdmin = $user && ($user->role === 'admin');
+
+        // Cek captcha hanya jika bukan admin
+        if (!$isAdmin) {
+            if (method_exists($this,'verifyCaptcha') && !$this->verifyCaptcha($request)) {
+                return response()->json(['message' => 'Captcha tidak valid. Coba lagi.'], 422);
+            }
         }
 
-        $user = Auth::user();
-
-        if (!$user->is_verified) {
-            Auth::logout();
-            return response()->json(['message' => 'Akun belum diverifikasi.'], 403);
+        // Proses auth standar
+        if (!$user || !\Hash::check($data['password'], $user->password)) {
+            return response()->json(['message' => 'Kredensial tidak valid'], 401);
         }
 
-        $token = $user->createToken('api_token')->plainTextToken;
+        // Token baru
+        $token = $user->createToken('auth')->plainTextToken;
 
         return response()->json([
             'message' => 'Login berhasil',
-            'user' => $user,
             'token' => $token,
+            'user' => $user,
+        ]);
+    }
+
+    // UBAH: verifikasi 2FA terhadap verification_code + two_factor_expires_at
+    public function verifyTwoFactor(Request $request)
+    {
+        $data = $request->validate([
+            'email' => 'required|email',
+            'code' => 'required|string',
+        ]);
+
+        $user = \App\Models\User::where('email', $data['email'])->first();
+        if (!$user || !$user->two_factor_enabled) {
+            return response()->json(['message' => '2FA tidak aktif untuk akun ini'], 422);
+        }
+
+        $valid = hash_equals((string) ($user->verification_code ?? ''), (string) $data['code']);
+        $notExpired = $user->two_factor_expires_at && Carbon::parse($user->two_factor_expires_at)->gt(now());
+        if (!$valid || !$notExpired) {
+            return response()->json(['message' => 'Kode OTP tidak valid atau kedaluwarsa'], 422);
+        }
+
+        // Bersihkan OTP & expiry lalu terbitkan token
+        $user->verification_code = null;
+        $user->two_factor_expires_at = null;
+        $user->save();
+
+        $token = $user->createToken('auth')->plainTextToken;
+
+        return response()->json([
+            'message' => 'Verifikasi berhasil',
+            'token' => $token,
+            'user' => $user,
         ]);
     }
 
@@ -157,33 +182,31 @@ class AuthController extends Controller
     // ====================== RESEND VERIFIKASI ======================
     public function resendVerification(Request $request)
     {
-        $request->validate(['email' => 'required|email']);
-
-        $user = User::where('email', $request->email)->first();
-
+        $user = \App\Models\User::where('email', $request->input('email'))->first();
         if (!$user) {
             return response()->json(['message' => 'Email tidak ditemukan'], 404);
         }
-
         if ($user->is_verified) {
-            return response()->json(['message' => 'Akun sudah diverifikasi'], 400);
+            return response()->json(['message' => 'Akun sudah terverifikasi'], 422);
         }
 
-        $verificationCode = rand(100000, 999999);
-        $user->update(['verification_code' => $verificationCode]);
+        // Regenerate OTP
+        $otp = (string) random_int(100000, 999999);
+        $user->verification_code = $otp;
+        $user->save();
 
         try {
-            Mail::raw("Kode verifikasi baru Anda adalah: {$verificationCode}", function ($message) use ($user) {
-                $message->to($user->email)->subject('Kode Verifikasi Baru Akun Anda');
-            });
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'Gagal mengirim ulang email verifikasi',
-                'error' => $e->getMessage()
-            ], 500);
+            Mail::raw(
+                "Halo {$user->name},\n\nKode verifikasi terbaru: {$otp}\nJika kamu tidak meminta kode ini abaikan email ini.\n\nTechStore",
+                function ($m) use ($user) {
+                    $m->to($user->email)->subject('Kode Verifikasi Baru TechStore');
+                }
+            );
+        } catch (\Throwable $e) {
+            \Log::error('Mail resend OTP gagal: '.$e->getMessage());
         }
 
-        return response()->json(['message' => 'Kode verifikasi baru telah dikirim ke email Anda.']);
+        return response()->json(['message' => 'Kode verifikasi baru telah dikirim ke email.']);
     }
 
     // ====================== GOOGLE LOGIN ======================
@@ -314,6 +337,155 @@ HTML;
                 'detail' => $e->getMessage(),
                 'hint' => 'Periksa storage/logs/laravel.log untuk stacktrace'
             ], 500);
+        }
+    }
+
+    // ====================== ADMIN - LIST USER ======================
+    public function listUsers(Request $request)
+    {
+        $admin = $request->user();
+        if (!$admin || ($admin->role ?? 'user') !== 'admin') {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $q = $request->query('q');
+        $includeAdmin = $request->boolean('include_admin', false);
+
+        $query = User::query()
+            ->select('id','name','email','role','is_verified','is_active','profile_image','created_at');
+
+        if (!$includeAdmin) {
+            $query->where('role', '!=', 'admin');
+        }
+
+        if ($q) {
+            $query->where(function ($sub) use ($q) {
+                $sub->where('name','like',"%{$q}%")
+                    ->orWhere('email','like',"%{$q}%")
+                    ->orWhere('role','like',"%{$q}%");
+            });
+        }
+
+        $users = $query->orderBy('created_at','desc')->get();
+
+        return response()->json(['users' => $users]);
+    }
+
+    // ====================== ADMIN - SET USER STATUS ======================
+    public function setUserStatus(Request $request, $id)
+    {
+        $admin = $request->user();
+        if (!$admin || ($admin->role ?? 'user') !== 'admin') {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $data = $request->validate([
+            'is_active' => 'required|boolean',
+        ]);
+
+        if ((int)$admin->id === (int)$id) {
+            return response()->json(['message' => 'Tidak dapat mengubah status akun sendiri'], 422);
+        }
+
+        $user = User::find($id);
+        if (!$user) {
+            return response()->json(['message' => 'User tidak ditemukan'], 404);
+        }
+        if (($user->role ?? 'user') === 'admin') {
+            return response()->json(['message' => 'Tidak dapat mengubah status akun admin'], 422);
+        }
+
+        $user->is_active = (bool) $data['is_active'];
+        $user->save();
+
+        if ($user->is_active === false && method_exists($user, 'tokens')) {
+            try { $user->tokens()->delete(); } catch (\Throwable $e) {}
+        }
+
+        return response()->json([
+            'message' => 'Status user diperbarui',
+            'user' => $user->fresh(['id','name','email','role','is_verified','is_active','profile_image','created_at'])
+        ]);
+    }
+
+    // NEW: Kirim OTP lupa password ke verification_code + expiry two_factor_expires_at (30 menit)
+    public function forgotPassword(Request $request)
+    {
+        $data = $request->validate([
+            'email' => 'required|email'
+        ]);
+
+        $user = \App\Models\User::where('email', $data['email'])->first();
+        if ($user) {
+            $code = (string) random_int(100000, 999999);
+            $user->verification_code = $code;
+            $user->two_factor_expires_at = now()->addMinutes(30);
+            $user->save();
+
+            try {
+                Mail::raw("Kode OTP reset password Anda adalah: {$code}. Berlaku 30 menit.", function ($m) use ($user) {
+                    $m->to($user->email)->subject('OTP Reset Password');
+                });
+            } catch (\Throwable $e) {
+                // ignore mailing errors
+            }
+        }
+
+        // Response generik demi keamanan
+        return response()->json(['message' => 'Jika email terdaftar, kode OTP telah dikirim.']);
+    }
+
+    // UBAH: Reset password memakai verification_code + two_factor_expires_at
+    public function resetPassword(Request $request)
+    {
+        $data = $request->validate([
+            'email' => 'required|email',
+            'code' => 'required|string',
+            'new_password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $user = \App\Models\User::where('email', $data['email'])->first();
+        if (!$user) {
+            return response()->json(['message' => 'User tidak ditemukan'], 404);
+        }
+
+        $valid = hash_equals((string) ($user->verification_code ?? ''), (string) $data['code']);
+        $notExpired = $user->two_factor_expires_at && Carbon::parse($user->two_factor_expires_at)->gt(now());
+        if (!$valid || !$notExpired) {
+            return response()->json(['message' => 'Kode OTP tidak valid atau kedaluwarsa'], 422);
+        }
+
+        $user->password = Hash::make($data['new_password']);
+        // Hapus OTP + expiry dan revoke token login aktif (opsional)
+        $user->verification_code = null;
+        $user->two_factor_expires_at = null;
+        $user->save();
+        try { $user->tokens()->delete(); } catch (\Throwable $e) {}
+
+        return response()->json(['message' => 'Password berhasil direset. Silakan login kembali.']);
+    }
+
+    // NEW: verify captcha helper
+    private function verifyCaptcha(Request $request): bool
+    {
+        $token = (string) $request->input('captcha_token', '');
+        if (!$token) {
+            return false;
+        }
+
+        // NOTE: sebaiknya pindah ke env('RECAPTCHA_SECRET')
+        $secret = '6LfzwggsAAAAANIT_uI5A2BLatmZ-4lUwU_B7avl';
+        try {
+            $res = Http::asForm()->post('https://www.google.com/recaptcha/api/siteverify', [
+                'secret' => $secret,
+                'response' => $token,
+                'remoteip' => $request->ip(),
+            ]);
+            if (!$res->ok()) return false;
+            $json = $res->json();
+            return (bool)($json['success'] ?? false);
+        } catch (\Throwable $e) {
+            return false;
         }
     }
 }

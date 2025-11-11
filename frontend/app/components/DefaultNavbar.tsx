@@ -1,67 +1,71 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import { showToast } from "../components/Toast";
+
+// NEW: inline avatar placeholder
+const FALLBACK_AVATAR =
+  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='100%' height='100%' rx='8' ry='8' fill='%23e5e7eb'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%239ca3af' font-size='12'>Avatar</text></svg>";
 
 export default function DefaultNavbar() {
   const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [cartItemsCount, setCartItemsCount] = useState(0);
   const [isMounted, setIsMounted] = useState(false);
+  const [profileImg, setProfileImg] = useState<string | null>(null);
+  const [showOrdersMenu, setShowOrdersMenu] = useState(false);
+  const ordersMenuRef = useRef<HTMLDivElement | null>(null);
+  const [ordersMenuClickOpen, setOrdersMenuClickOpen] = useState(false);
 
-  // Set mounted state untuk menghindari hydration mismatch
+  const getImageUrl = (path?: string) => {
+    if (!path) return "/images/placeholder.svg";
+    if (path.startsWith("http")) return path;
+    if (path.startsWith("storage/")) return `http://127.0.0.1:8000/${path}`;
+    return `http://127.0.0.1:8000/storage/${path}`;
+  };
+
   useEffect(() => {
     setIsMounted(true);
   }, []);
 
-  // Fungsi untuk update login status (hanya aktif jika user sudah verifikasi)
   const updateLoginStatus = () => {
     const token = localStorage.getItem("token");
-    const userData = localStorage.getItem("user");
-
-    if (!token || !userData) {
-      setIsLoggedIn(false);
-      return;
-    }
-
-    try {
-      const user = JSON.parse(userData);
-
-      // Jika belum verifikasi, jangan dianggap login
-      if (!user.email_verified_at) {
-        setIsLoggedIn(false);
-        return;
-      }
-
+    const isVerified = localStorage.getItem("isVerified");
+    // UBAH: gunakan flag isVerified yang diisi saat verify-token
+    if (token && isVerified === "true") {
       setIsLoggedIn(true);
-    } catch (error) {
-      console.error("Error parsing user data:", error);
+    } else {
       setIsLoggedIn(false);
     }
   };
 
-  // Fungsi untuk update cart count dari localStorage
   const updateCartCount = () => {
+    // Prefer fast counter
+    const fast = parseInt(localStorage.getItem("cartCount") || "0", 10) || 0;
+
+    // Or compute from localStorage 'cart'
+    let fromCart = 0;
     const cartData = localStorage.getItem("cart");
     if (cartData) {
       try {
         const cart = JSON.parse(cartData);
-        const count = cart.reduce(
-          (total: number, item: any) => total + item.quantity,
-          0
-        );
-        setCartItemsCount(count);
-      } catch (error) {
-        console.error("Error parsing cart data:", error);
-        setCartItemsCount(0);
+        fromCart = Array.isArray(cart)
+          ? cart.reduce(
+              (total: number, item: any) =>
+                total + Number(item?.quantity ?? item?.qty ?? 0),
+              0
+            )
+          : 0;
+      } catch {
+        fromCart = 0;
       }
-    } else {
-      setCartItemsCount(0);
     }
+
+    setCartItemsCount(Math.max(fast, fromCart));
   };
 
-  // Fungsi untuk update cart count dari API
   const updateCartCountFromAPI = async () => {
     try {
       const token = localStorage.getItem("token");
@@ -78,13 +82,18 @@ export default function DefaultNavbar() {
 
       if (response.ok) {
         const cartData = await response.json();
-        const count = cartData.reduce(
-          (total: number, item: any) => total + item.quantity,
-          0
-        );
-        setCartItemsCount(count);
-
+        const count = Array.isArray(cartData)
+          ? cartData.reduce(
+              (total: number, item: any) =>
+                total + Number(item?.quantity ?? item?.qty ?? 0),
+              0
+            )
+          : 0;
+        setCartItemsCount(count || 0);
         localStorage.setItem("cart", JSON.stringify(cartData));
+      } else {
+        // fallback ke localStorage bila gagal
+        updateCartCount();
       }
     } catch (error) {
       console.error("Error fetching cart from API:", error);
@@ -92,30 +101,58 @@ export default function DefaultNavbar() {
     }
   };
 
-  // Cek login + cart saat komponen mount
+  const fetchProfileImage = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const isVerified = localStorage.getItem("isVerified");
+      if (!token || isVerified !== "true") {
+        setProfileImg(null);
+        return;
+      }
+      const res = await fetch("http://127.0.0.1:8000/api/user", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const user = await res.json();
+        const path = user?.profile_image || null;
+        setProfileImg(path ? getImageUrl(path) : null);
+        localStorage.setItem("user", JSON.stringify(user));
+      }
+    } catch (error) {
+      console.error("Error fetching profile:", error);
+    }
+  };
+
   useEffect(() => {
     if (!isMounted) return;
 
     updateLoginStatus();
     updateCartCountFromAPI();
+    fetchProfileImage();
 
     const handleStorageChange = () => {
       updateLoginStatus();
       updateCartCount();
+      fetchProfileImage();
     };
-
     const handleCartChange = () => {
       updateCartCountFromAPI();
+    };
+    // NEW
+    const handleCartLocal = () => {
+      updateCartCount();
     };
 
     window.addEventListener("storage", handleStorageChange);
     window.addEventListener("authChange", handleStorageChange);
     window.addEventListener("cartChange", handleCartChange);
     window.addEventListener("cartUpdate", handleCartChange);
+    window.addEventListener("cartLocal", handleCartLocal);
 
     const interval = setInterval(() => {
       updateLoginStatus();
       updateCartCount();
+      fetchProfileImage();
     }, 2000);
 
     return () => {
@@ -123,6 +160,7 @@ export default function DefaultNavbar() {
       window.removeEventListener("authChange", handleStorageChange);
       window.removeEventListener("cartChange", handleCartChange);
       window.removeEventListener("cartUpdate", handleCartChange);
+      window.removeEventListener("cartLocal", handleCartLocal);
       clearInterval(interval);
     };
   }, [isMounted]);
@@ -131,22 +169,14 @@ export default function DefaultNavbar() {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     localStorage.removeItem("cart");
-    alert("Berhasil logout!");
-    setIsLoggedIn(false);
-    setCartItemsCount(0);
-
-    window.dispatchEvent(new Event("storage"));
-    window.dispatchEvent(new Event("authChange"));
-    window.dispatchEvent(new Event("cartChange"));
-    window.dispatchEvent(new Event("cartUpdate"));
-
+    showToast("success", "Logout berhasil");
     router.push("/pages/auth/login");
   };
 
   const handleCartClick = () => {
     const token = localStorage.getItem("token");
     if (!token) {
-      alert("Silakan login terlebih dahulu untuk melihat keranjang!");
+      showToast("info", "Silakan login untuk melihat keranjang");
       router.push("/pages/auth/login");
       return;
     }
@@ -154,16 +184,44 @@ export default function DefaultNavbar() {
   };
 
   const handleLogin = () => {
+    showToast("info", "Masuk untuk melanjutkan");
     router.push("/pages/auth/login");
   };
 
   const handleRegister = () => {
+    showToast("info", "Buat akun baru");
     router.push("/pages/auth/register");
   };
 
   const handleProfile = () => {
     router.push("/pages/profile");
   };
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (!ordersMenuRef.current) return;
+      if (!ordersMenuRef.current.contains(e.target as Node)) {
+        setShowOrdersMenu(false);
+        setOrdersMenuClickOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setShowOrdersMenu(false);
+        setOrdersMenuClickOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    document.addEventListener("touchstart", onClickOutside, {
+      passive: true,
+    } as any);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("touchstart", onClickOutside as any);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
 
   if (!isMounted) {
     return (
@@ -193,9 +251,16 @@ export default function DefaultNavbar() {
             className="flex items-center space-x-3 cursor-pointer"
             onClick={() => router.push("/")}
           >
-            <div className="w-10 h-10 rounded-full flex items-center justify-center bg-black">
-              <span className="font-bold text-lg text-white">TS</span>
-            </div>
+            {/* UBAH: gunakan logo dari public/images/logoo.jpg */}
+            <img
+              src="/images/logoo.jpg"
+              alt="TechStore"
+              className="w-10 h-10 rounded-full object-cover border border-gray-300"
+              onError={(e) =>
+                ((e.currentTarget as HTMLImageElement).src =
+                  "/images/placeholder.svg")
+              }
+            />
             <span className="text-2xl font-black tracking-tight text-black">
               TECHSTORE
             </span>
@@ -207,7 +272,7 @@ export default function DefaultNavbar() {
               whileHover={{ y: -2 }}
               whileTap={{ y: 0 }}
               className="font-semibold text-gray-700 hover:text-black"
-              onClick={() => router.push("/#products")}
+              onClick={() => router.push("/pages/productsfull")}
             >
               Products
             </motion.button>
@@ -223,10 +288,97 @@ export default function DefaultNavbar() {
               whileHover={{ y: -2 }}
               whileTap={{ y: 0 }}
               className="font-semibold text-gray-700 hover:text-black"
-              onClick={() => router.push("/#contact")}
+              onClick={() => router.push("/pages/contact")}
             >
               Contact
             </motion.button>
+
+            {/* 🔽 Dropdown Pesanan Saya */}
+            <div
+              className="relative"
+              ref={ordersMenuRef}
+              onMouseEnter={() => setShowOrdersMenu(true)}
+              onMouseLeave={() => {
+                if (!ordersMenuClickOpen) setShowOrdersMenu(false);
+              }}
+            >
+              <button
+                className="font-semibold text-gray-700 hover:text-black"
+                onClick={() => {
+                  const next = !ordersMenuClickOpen;
+                  setOrdersMenuClickOpen(next);
+                  setShowOrdersMenu(next);
+                }}
+              >
+                Pesanan Saya ▾
+              </button>
+              {showOrdersMenu && (
+                <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-200 z-50">
+                  <ul className="py-2 text-sm text-gray-800">
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/payment/pending");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100"
+                      >
+                        Belum Bayar
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/pesanan/dikemas");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100"
+                      >
+                        Dikemas
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/pesanan/dikirim");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100"
+                      >
+                        Dikirim
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/pesanan/beri-penilaian");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100"
+                      >
+                        Beri Penilaian
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/history");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100"
+                      >
+                        History Penilaian
+                      </button>
+                    </li>
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Auth & Cart */}
@@ -283,27 +435,28 @@ export default function DefaultNavbar() {
               </div>
             ) : (
               <div className="flex items-center space-x-4">
+                {/* Profil */}
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
-                  className="flex items-center space-x-2 p-2 text-gray-700 hover:text-black"
+                  className="flex items-center space-x-2 p-1 text-gray-700 hover:text-black"
                   onClick={handleProfile}
+                  title="Profil"
                 >
-                  <svg
-                    className="w-6 h-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                    />
-                  </svg>
-                  <span className="font-medium hidden sm:block">Profile</span>
+                  <img
+                    src={profileImg || FALLBACK_AVATAR}
+                    alt="Avatar"
+                    loading="lazy"
+                    decoding="async"
+                    fetchPriority="low"
+                    className="w-8 h-8 rounded-full object-cover border border-gray-300"
+                    onError={(e) =>
+                      ((e.currentTarget as HTMLImageElement).src =
+                        FALLBACK_AVATAR)
+                    }
+                  />
                 </motion.button>
+
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}

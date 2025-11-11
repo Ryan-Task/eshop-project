@@ -17,5 +17,19 @@ class Product extends Model
         'description',
         'image',
         'harga_modal',
+        'rating_count',
+        'rating_average',
+        'sold_count',
+        'is_archived',
+    ];
+
+    protected $casts = [
+        'price' => 'float',
+        'harga_modal' => 'float',
+        'stock' => 'integer',
+        'rating_count' => 'integer',
+        'rating_average' => 'float',
+        'sold_count' => 'integer',
+        'is_archived' => 'boolean',
     ];
 }

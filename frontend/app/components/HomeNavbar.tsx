@@ -1,8 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import { showToast } from "../components/Toast";
+
+// NEW: inline avatar placeholder
+const FALLBACK_AVATAR =
+  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='100%' height='100%' rx='8' ry='8' fill='%23e5e7eb'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%239ca3af' font-size='12'>Avatar</text></svg>";
 
 export default function HomeNavbar() {
   const router = useRouter();
@@ -10,13 +15,22 @@ export default function HomeNavbar() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [cartItemsCount, setCartItemsCount] = useState(0);
   const [isMounted, setIsMounted] = useState(false);
+  const [profileImg, setProfileImg] = useState<string | null>(null);
+  const [showOrdersMenu, setShowOrdersMenu] = useState(false);
+  const ordersMenuRef = useRef<HTMLDivElement | null>(null);
+  const [ordersMenuClickOpen, setOrdersMenuClickOpen] = useState(false);
 
-  // Set mounted state untuk menghindari hydration mismatch
+  const getImageUrl = (path?: string) => {
+    if (!path) return "/images/placeholder.svg";
+    if (path.startsWith("http")) return path;
+    if (path.startsWith("storage/")) return `http://127.0.0.1:8000/${path}`;
+    return `http://127.0.0.1:8000/storage/${path}`;
+  };
+
   useEffect(() => {
     setIsMounted(true);
   }, []);
 
-  // Cek scroll position dengan throttle
   useEffect(() => {
     let ticking = false;
 
@@ -36,12 +50,10 @@ export default function HomeNavbar() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  // Fungsi untuk update login status
   const updateLoginStatus = () => {
     const token = localStorage.getItem("token");
     const isVerified = localStorage.getItem("isVerified");
 
-    // Hanya dianggap login jika token ADA dan sudah diverifikasi
     if (token && isVerified === "true") {
       setIsLoggedIn(true);
     } else {
@@ -49,27 +61,32 @@ export default function HomeNavbar() {
     }
   };
 
-  // Fungsi untuk update cart count dari localStorage
   const updateCartCount = () => {
+    // 1) Prefer local fast counter if set
+    const fast = parseInt(localStorage.getItem("cartCount") || "0", 10) || 0;
+
+    // 2) Or compute from localStorage 'cart' if present
+    let fromCart = 0;
     const cartData = localStorage.getItem("cart");
     if (cartData) {
       try {
         const cart = JSON.parse(cartData);
-        const count = cart.reduce(
-          (total: number, item: any) => total + item.quantity,
-          0
-        );
-        setCartItemsCount(count);
-      } catch (error) {
-        console.error("Error parsing cart data:", error);
-        setCartItemsCount(0);
+        fromCart = Array.isArray(cart)
+          ? cart.reduce(
+              (total: number, item: any) =>
+                total + Number(item?.quantity ?? item?.qty ?? 0),
+              0
+            )
+          : 0;
+      } catch {
+        fromCart = 0;
       }
-    } else {
-      setCartItemsCount(0);
     }
+
+    const finalCount = Math.max(fast, fromCart);
+    setCartItemsCount(finalCount);
   };
 
-  // Fungsi untuk update cart count dari API
   const updateCartCountFromAPI = async () => {
     try {
       const token = localStorage.getItem("token");
@@ -86,57 +103,85 @@ export default function HomeNavbar() {
 
       if (response.ok) {
         const cartData = await response.json();
-        const count = cartData.reduce(
-          (total: number, item: any) => total + item.quantity,
-          0
-        );
-        setCartItemsCount(count);
-
-        // Simpan ke localStorage untuk konsistensi
+        const count = Array.isArray(cartData)
+          ? cartData.reduce(
+              (total: number, item: any) =>
+                total + Number(item?.quantity ?? item?.qty ?? 0),
+              0
+            )
+          : 0;
+        setCartItemsCount(count || 0);
         localStorage.setItem("cart", JSON.stringify(cartData));
+      } else {
+        updateCartCount();
       }
     } catch (error) {
       console.error("Error fetching cart from API:", error);
-      // Fallback ke localStorage jika API gagal
       updateCartCount();
     }
   };
 
-  // Cek apakah sudah login dan get cart count
+  const fetchProfileImage = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const isVerified = localStorage.getItem("isVerified");
+      if (!token || isVerified !== "true") {
+        setProfileImg(null);
+        return;
+      }
+      const res = await fetch("http://127.0.0.1:8000/api/user", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const user = await res.json();
+        const path = user?.profile_image || null;
+        setProfileImg(path ? getImageUrl(path) : null);
+        localStorage.setItem("user", JSON.stringify(user));
+      }
+    } catch (_) {
+      // abaikan
+    }
+  };
+
   useEffect(() => {
     if (!isMounted) return;
 
     updateLoginStatus();
     updateCartCountFromAPI();
+    fetchProfileImage();
 
-    // Event listener untuk perubahan di localStorage
     const handleStorageChange = () => {
       updateLoginStatus();
       updateCartCount();
+      fetchProfileImage();
     };
-
-    // Event listener untuk custom events
     const handleCartChange = () => {
       updateCartCountFromAPI();
     };
+    // NEW: instant local update listener (no API)
+    const handleCartLocal = () => {
+      updateCartCount();
+    };
 
-    // Listen untuk berbagai event
     window.addEventListener("storage", handleStorageChange);
     window.addEventListener("authChange", handleStorageChange);
     window.addEventListener("cartChange", handleCartChange);
     window.addEventListener("cartUpdate", handleCartChange);
+    window.addEventListener("cartLocal", handleCartLocal);
 
-    // Polling untuk perubahan (fallback)
+    // GANTI: interval 2000ms → 7000ms untuk kurangi beban
     const interval = setInterval(() => {
       updateLoginStatus();
       updateCartCount();
-    }, 2000);
+      fetchProfileImage();
+    }, 7000);
 
     return () => {
       window.removeEventListener("storage", handleStorageChange);
       window.removeEventListener("authChange", handleStorageChange);
       window.removeEventListener("cartChange", handleCartChange);
       window.removeEventListener("cartUpdate", handleCartChange);
+      window.removeEventListener("cartLocal", handleCartLocal);
       clearInterval(interval);
     };
   }, [isMounted]);
@@ -145,11 +190,11 @@ export default function HomeNavbar() {
     localStorage.removeItem("token");
     localStorage.removeItem("cart");
     localStorage.removeItem("isVerified");
-    alert("Berhasil logout!");
+    showToast("success", "Logout berhasil");
     setIsLoggedIn(false);
     setCartItemsCount(0);
+    setProfileImg(null);
 
-    // Trigger events untuk sync semua komponen
     window.dispatchEvent(new Event("storage"));
     window.dispatchEvent(new Event("authChange"));
     window.dispatchEvent(new Event("cartChange"));
@@ -161,9 +206,8 @@ export default function HomeNavbar() {
   const handleCartClick = () => {
     const token = localStorage.getItem("token");
     const isVerified = localStorage.getItem("isVerified");
-
     if (!token || isVerified !== "true") {
-      alert("Silakan login dan verifikasi akun terlebih dahulu!");
+      showToast("info", "Login & verifikasi dulu untuk melihat keranjang.");
       router.push("/pages/auth/login");
       return;
     }
@@ -175,6 +219,7 @@ export default function HomeNavbar() {
   };
 
   const handleRegister = () => {
+    showToast("info", "Silakan buat akun baru.");
     router.push("/pages/auth/register");
   };
 
@@ -182,12 +227,36 @@ export default function HomeNavbar() {
     router.push("/pages/profile");
   };
 
-  // Function untuk manual trigger cart update (bisa dipanggil dari komponen lain)
   const triggerCartUpdate = () => {
     window.dispatchEvent(new Event("cartUpdate"));
   };
 
-  // Prevent hydration mismatch
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (!ordersMenuRef.current) return;
+      if (!ordersMenuRef.current.contains(e.target as Node)) {
+        setShowOrdersMenu(false);
+        setOrdersMenuClickOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setShowOrdersMenu(false);
+        setOrdersMenuClickOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    document.addEventListener("touchstart", onClickOutside, {
+      passive: true,
+    } as any);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("touchstart", onClickOutside as any);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
   if (!isMounted) {
     return (
       <nav className="fixed top-0 left-0 right-0 z-50 bg-transparent">
@@ -218,13 +287,18 @@ export default function HomeNavbar() {
             className="flex items-center space-x-3 cursor-pointer"
             onClick={() => router.push("/")}
           >
-            <div
-              className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${
-                isScrolled ? "bg-black" : "bg-white/20 backdrop-blur-sm"
+            {/* UBAH: gunakan logo dari public/images/logoo.jpg */}
+            <img
+              src="/images/logoo.jpg"
+              alt="TechStore"
+              className={`w-10 h-10 rounded-full object-cover border ${
+                isScrolled ? "border-gray-300" : "border-white/60"
               }`}
-            >
-              <span className="font-bold text-lg text-white">TS</span>
-            </div>
+              onError={(e) =>
+                ((e.currentTarget as HTMLImageElement).src =
+                  "/images/placeholder.svg")
+              }
+            />
             <span
               className={`text-2xl font-black tracking-tight transition-colors ${
                 isScrolled ? "text-black" : "text-white"
@@ -244,12 +318,7 @@ export default function HomeNavbar() {
                   ? "text-gray-700 hover:text-black"
                   : "text-white/90 hover:text-white"
               }`}
-              onClick={() => {
-                const productsSection = document.getElementById("products");
-                if (productsSection) {
-                  productsSection.scrollIntoView({ behavior: "smooth" });
-                }
-              }}
+              onClick={() => router.push("/pages/productsfull")}
             >
               Products
             </motion.button>
@@ -273,15 +342,107 @@ export default function HomeNavbar() {
                   ? "text-gray-700 hover:text-black"
                   : "text-white/90 hover:text-white"
               }`}
-              onClick={() => {
-                const contactSection = document.getElementById("contact");
-                if (contactSection) {
-                  contactSection.scrollIntoView({ behavior: "smooth" });
-                }
-              }}
+              onClick={() => router.push("/pages/contact")} // ← update: arahkan ke /pages/contact
             >
               Contact
             </motion.button>
+
+            {/* Pesanan Saya dropdown */}
+            <div
+              className="relative"
+              ref={ordersMenuRef}
+              onMouseEnter={() => setShowOrdersMenu(true)}
+              onMouseLeave={() => {
+                if (!ordersMenuClickOpen) setShowOrdersMenu(false);
+              }}
+            >
+              <button
+                className={`font-semibold transition-colors ${
+                  isScrolled
+                    ? "text-gray-700 hover:text-black"
+                    : "text-white/90 hover:text-white"
+                }`}
+                onClick={() => {
+                  const next = !ordersMenuClickOpen;
+                  setOrdersMenuClickOpen(next);
+                  setShowOrdersMenu(next);
+                }}
+              >
+                Pesanan Saya ▾
+              </button>
+              {showOrdersMenu && (
+                <div
+                  className={`absolute right-0 mt-2 w-56 rounded-xl shadow-lg border ${
+                    isScrolled
+                      ? "bg-white border-gray-200"
+                      : "bg-white/95 border-white/40 backdrop-blur"
+                  } z-50`}
+                >
+                  <ul className="py-2 text-sm">
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/payment/pending");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100 text-gray-800"
+                      >
+                        Belum Bayar
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/pesanan/dikemas");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100 text-gray-800"
+                      >
+                        Dikemas
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/pesanan/dikirim");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100 text-gray-800"
+                      >
+                        Dikirim
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/pesanan/beri-penilaian");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100 text-gray-800"
+                      >
+                        Beri Penilaian
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => {
+                          setShowOrdersMenu(false);
+                          setOrdersMenuClickOpen(false);
+                          router.push("/pages/history");
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100 text-gray-800"
+                      >
+                        History Penilaian
+                      </button>
+                    </li>
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Auth Buttons & Cart */}
@@ -352,31 +513,31 @@ export default function HomeNavbar() {
               </div>
             ) : (
               <div className="flex items-center space-x-4">
+                {/* NEW: Avatar profil di navbar home */}
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
-                  className={`flex items-center space-x-2 p-2 rounded-lg transition-colors ${
-                    isScrolled
-                      ? "text-gray-700 hover:text-black"
-                      : "text-white hover:text-white/80"
+                  className={`flex items-center space-x-2 p-1 ${
+                    isScrolled ? "text-gray-700" : "text-white"
                   }`}
                   onClick={handleProfile}
+                  title="Profil"
                 >
-                  <svg
-                    className="w-6 h-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                    />
-                  </svg>
-                  <span className="font-medium hidden sm:block">Profile</span>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={profileImg || FALLBACK_AVATAR}
+                    alt="Avatar"
+                    loading="lazy"
+                    decoding="async"
+                    fetchPriority="low"
+                    className="w-8 h-8 rounded-full object-cover border border-gray-300"
+                    onError={(e) =>
+                      ((e.currentTarget as HTMLImageElement).src =
+                        FALLBACK_AVATAR)
+                    }
+                  />
                 </motion.button>
+
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -388,21 +549,7 @@ export default function HomeNavbar() {
                   }`}
                 >
                   <span className="hidden sm:block">Logout</span>
-                  <span className="sm:hidden">
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                      />
-                    </svg>
-                  </span>
+                  <span className="sm:hidden">Logout</span>
                 </motion.button>
               </div>
             )}

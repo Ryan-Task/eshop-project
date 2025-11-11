@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import api from "../../../api/api";
+import ToastHost, { showToast } from "../../../components/Toast";
 
-export default function VerifyPage() {
+function VerifyInner() {
   const router = useRouter();
+  const params = useSearchParams();
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [message, setMessage] = useState("");
@@ -14,47 +16,48 @@ export default function VerifyPage() {
   const [resending, setResending] = useState(false);
   const [showResendCard, setShowResendCard] = useState(false);
 
+  // Prefill email dari query
+  useEffect(() => {
+    const em = params?.get("email");
+    if (em) setEmail(em);
+  }, [params]);
+
   // Fungsi verifikasi kode
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
-    setMessage("");
+    if (!email.trim() || !code.trim()) {
+      showToast("warning", "Email dan kode wajib diisi.");
+      return;
+    }
     setLoading(true);
-
     try {
-      const response = await api.post("/verify", {
-        email,
-        verification_code: code,
+      const res = await api.post("/verify", {
+        email: email.trim(),
+        code: code.trim(),
       });
-
-      setMessage(response.data.message || "Verifikasi berhasil!");
-
-      // Auto-login setelah verifikasi
-      const loginResponse = await api.post("/login", {
-        email,
-        password: response.data.password || "",
-      });
-
-      const token = loginResponse.data.token;
-      const user = loginResponse.data.user;
-
-      if (token) {
-        localStorage.setItem("token", token);
-        localStorage.setItem("user", JSON.stringify(user));
-        api.defaults.headers.common["Authorization"] = `Bearer ${token}`;
-
-        alert("Verifikasi berhasil! Anda telah login otomatis.");
-        router.push("/dashboard");
-      } else {
-        alert("Verifikasi berhasil! Silakan login manual.");
-        router.push("/auth/login");
+      const token = res.data?.token;
+      const user = res.data?.user;
+      if (token && user) {
+        try {
+          localStorage.setItem("token", token);
+          localStorage.setItem("user", JSON.stringify(user));
+          localStorage.setItem("isVerified", "true");
+          window.dispatchEvent(new Event("storage"));
+          window.dispatchEvent(new Event("authChange"));
+        } catch {}
       }
+      showToast("success", res.data?.message || "Verifikasi berhasil.");
+      setTimeout(() => {
+        router.replace("/"); // langsung masuk tanpa login ulang
+      }, 900);
     } catch (err: any) {
-      console.error(err);
-      setError(
-        err.response?.data?.message ||
-          "Kode verifikasi salah atau email tidak ditemukan."
-      );
+      const data = err?.response?.data;
+      const msg =
+        data?.errors?.code?.[0] ||
+        data?.errors?.verification_code?.[0] ||
+        data?.message ||
+        "Verifikasi gagal.";
+      showToast("error", msg);
     } finally {
       setLoading(false);
     }
@@ -74,11 +77,8 @@ export default function VerifyPage() {
     setResending(true);
 
     try {
-      const response = await api.post("/resend-verification", { email });
-      setMessage(
-        response.data.message ||
-          "Kode verifikasi baru telah dikirim ke email Anda."
-      );
+      await api.post("/resend-verification", { email });
+      setMessage("Kode verifikasi baru telah dikirim ke email Anda.");
       setShowResendCard(false);
     } catch (err: any) {
       console.error(err);
@@ -208,5 +208,22 @@ export default function VerifyPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function VerifyPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen flex items-center justify-center bg-white">
+          <div className="text-sm text-gray-600">Memuat...</div>
+        </main>
+      }
+    >
+      <main className="min-h-screen bg-white pt-20">
+        <ToastHost />
+        <VerifyInner />
+      </main>
+    </Suspense>
   );
 }

@@ -6,7 +6,14 @@ import axios from "axios";
 import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
+interface Review {
+  rating: number;
+  comment?: string | null;
+  date?: string | null;
+  shipping_status?: string | null;
+}
 interface Product {
   id: number;
   name: string;
@@ -18,6 +25,10 @@ interface Product {
   image: string;
   created_at: string;
   updated_at: string;
+  rating_average?: number;
+  rating_count?: number;
+  sold_count?: number;
+  reviews?: Review[];
 }
 
 export default function ProductDetailPage() {
@@ -28,10 +39,11 @@ export default function ProductDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(1);
+  const router = useRouter();
 
   // Fungsi untuk mendapatkan URL gambar yang benar
   const getImageUrl = (imagePath: string) => {
-    if (!imagePath) return "/images/placeholder.jpg";
+    if (!imagePath) return "/images/placeholder.svg";
 
     if (imagePath.startsWith("http")) {
       return imagePath;
@@ -103,10 +115,71 @@ export default function ProductDetailPage() {
     }
   };
 
+  // + Tambah: Beli Sekarang => tambah ke cart, lalu ke checkout
+  const handleBuyNow = async () => {
+    if (!product) return;
+
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        alert("Silakan login terlebih dahulu untuk membeli!");
+        router.push("/pages/auth/login");
+        return;
+      }
+
+      // Tambahkan produk ke cart sesuai quantity saat ini
+      await axios.post(
+        "http://127.0.0.1:8000/api/cart",
+        { product_id: product.id, quantity },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      // Arahkan ke halaman checkout
+      router.push("/pages/checkout");
+    } catch (error: any) {
+      console.error("Gagal memproses beli sekarang:", error);
+      if (error.response && error.response.status === 401) {
+        alert("Sesi login habis, silakan login ulang.");
+        router.push("/pages/auth/login");
+      } else {
+        alert("Terjadi kesalahan saat memproses pembelian.");
+      }
+    }
+  };
+
   const handleQuantityChange = (newQuantity: number) => {
     if (newQuantity < 1) return;
     if (product && newQuantity > product.stock) return;
     setQuantity(newQuantity);
+  };
+
+  // Tambahkan helper render bintang rating
+  const renderStars = (avg?: number) => {
+    const val = Math.round(((avg || 0) + Number.EPSILON) * 2) / 2;
+    return (
+      <div className="flex items-center">
+        {[1, 2, 3, 4, 5].map((i) => (
+          <span
+            key={i}
+            className={`text-yellow-500 text-xl ${
+              i <= Math.floor(val)
+                ? "opacity-100"
+                : i - 0.5 === val
+                ? "opacity-100"
+                : "opacity-30"
+            }`}
+          >
+            ★
+          </span>
+        ))}
+      </div>
+    );
   };
 
   if (loading) {
@@ -141,6 +214,11 @@ export default function ProductDetailPage() {
       </div>
     );
   }
+
+  // NEW: derive rating & sold
+  const avg = (product as any).rating_average || 0;
+  const count = (product as any).rating_count || 0;
+  const sold = (product as any).sold_count || 0;
 
   return (
     <main className="min-h-screen bg-white">
@@ -217,9 +295,28 @@ export default function ProductDetailPage() {
               className="space-y-6"
             >
               <div>
-                <h1 className="text-3xl md:text-4xl font-bold mb-4 text-black">
+                <h1 className="text-3xl md:text-4xl font-bold mb-2 text-black">
                   {product.name}
                 </h1>
+
+                {/* NEW: Rating + jumlah ulasan + terjual */}
+                <div className="flex items-center gap-4 mb-4">
+                  <div className="flex items-center gap-2">
+                    {renderStars(avg)}
+                    <span className="text-black font-semibold">
+                      {avg.toFixed(1)}
+                    </span>
+                    <span className="text-gray-500 text-sm">
+                      ({count} ulasan)
+                    </span>
+                  </div>
+                  <div className="text-gray-600">•</div>
+                  <div className="text-gray-700">
+                    Terjual{" "}
+                    <span className="font-semibold text-black">{sold}</span>
+                  </div>
+                </div>
+
                 <div className="flex items-center space-x-4 mb-4">
                   <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
                     {product.type}
@@ -380,10 +477,11 @@ export default function ProductDetailPage() {
                     <span>Tambah ke Keranjang</span>
                   </motion.button>
 
-                  {/* Buy Now Button */}
+                  {/* Buy Now Button -> langsung ke checkout */}
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
+                    onClick={handleBuyNow} // + pakai handler baru
                     className="w-full bg-blue-600 text-white py-4 rounded-xl text-lg font-bold hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
                   >
                     <span>⚡</span>
@@ -424,6 +522,58 @@ export default function ProductDetailPage() {
                 </motion.div>
               )}
             </motion.div>
+          </div>
+
+          {/* Review Section */}
+          <div className="mt-10">
+            <h3 className="text-xl font-bold text-black mb-4">
+              Ulasan Pembeli
+            </h3>
+            {count === 0 ? (
+              <div className="text-gray-600">Belum ada ulasan.</div>
+            ) : (
+              <div className="space-y-4">
+                {(product.reviews || []).map((rv, idx) => (
+                  <div
+                    key={idx}
+                    className="border border-gray-200 rounded-xl p-4 bg-gray-50"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="flex">
+                        {[1, 2, 3, 4, 5].map((i) => (
+                          <span
+                            key={i}
+                            className={`text-lg ${
+                              i <= (rv.rating || 0)
+                                ? "text-yellow-500"
+                                : "text-gray-300"
+                            }`}
+                          >
+                            ★
+                          </span>
+                        ))}
+                      </div>
+                      {rv.date && (
+                        <span className="text-xs text-gray-500">
+                          {new Date(rv.date).toLocaleDateString("id-ID", {
+                            day: "2-digit",
+                            month: "long",
+                            year: "numeric",
+                          })}
+                        </span>
+                      )}
+                    </div>
+                    {rv.comment ? (
+                      <div className="text-black text-sm">{rv.comment}</div>
+                    ) : (
+                      <div className="text-gray-500 text-sm italic">
+                        Tidak ada komentar.
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </section>

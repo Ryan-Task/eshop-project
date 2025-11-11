@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Cart;
+use App\Models\Product; // NEW
 
 class CartController extends Controller
 {
@@ -16,19 +17,35 @@ class CartController extends Controller
 
         $user = $request->user();
 
-        // Cek apakah produk sudah ada di keranjang
-        $cart = Cart::where('user_id', $user->id)
+        // NEW: cek produk dan stok
+        $product = Product::find($request->product_id);
+        if (!$product) {
+            return response()->json(['message' => 'Produk tidak ditemukan'], 404);
+        }
+        $current = Cart::where('user_id', $user->id)
             ->where('product_id', $request->product_id)
             ->first();
+        $newQty = (int)($current?->quantity ?? 0) + (int)$request->quantity;
 
-        if ($cart) {
-            $cart->quantity += $request->quantity;
-            $cart->save();
+        if ((int)$product->stock <= 0) {
+            return response()->json(['message' => 'Stok habis'], 422);
+        }
+        if ($newQty > (int)$product->stock) {
+            return response()->json([
+                'message' => 'Stok tidak cukup. Maksimal ' . (int)$product->stock . ' unit.',
+                'max' => (int)$product->stock,
+            ], 422);
+        }
+
+        // Cek apakah produk sudah ada di keranjang
+        if ($current) {
+            $current->quantity = $newQty;
+            $current->save();
         } else {
             Cart::create([
                 'user_id' => $user->id,
                 'product_id' => $request->product_id,
-                'quantity' => $request->quantity,
+                'quantity' => (int)$request->quantity,
             ]);
         }
 
@@ -64,13 +81,28 @@ class CartController extends Controller
         ]);
 
         $user = $request->user();
-        $cartItem = Cart::where('user_id', $user->id)->where('id', $id)->first();
+        $cartItem = Cart::where('user_id', $user->id)
+            ->where('id', $id)
+            ->with('product') // NEW
+            ->first();
 
         if (!$cartItem) {
             return response()->json(['message' => 'Item tidak ditemukan'], 404);
         }
 
-        $cartItem->quantity = $request->quantity;
+        // NEW: validasi stok
+        $stock = (int)($cartItem->product?->stock ?? 0);
+        if ($stock <= 0) {
+            return response()->json(['message' => 'Stok habis'], 422);
+        }
+        if ((int)$request->quantity > $stock) {
+            return response()->json([
+                'message' => 'Stok tidak cukup. Maksimal ' . $stock . ' unit.',
+                'max' => $stock,
+            ], 422);
+        }
+
+        $cartItem->quantity = (int)$request->quantity;
         $cartItem->save();
 
         return response()->json(['message' => 'Quantity berhasil diperbarui']);

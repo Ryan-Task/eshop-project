@@ -17,8 +17,15 @@ class User extends Authenticatable
         'role',
         'is_verified',
         'verification_code',
-        'email_verified_at'
-
+        'email_verified_at',
+        'address',
+        'profile_image',
+        'is_active', // Tambahkan is_active di sini
+        // NEW: 2FA fields
+        'two_factor_enabled',
+        'two_factor_code',
+        'two_factor_expires_at',
+        'phone','birth_place','birth_date', // NEW
     ];
 
     protected $hidden = [
@@ -26,6 +33,16 @@ class User extends Authenticatable
         'remember_token',
         'verification_code',
 
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean', // Tambahkan cast untuk is_active
+        'is_verified' => 'boolean',
+        'email_verified_at' => 'datetime',
+        // NEW: 2FA cast
+        'two_factor_enabled' => 'boolean',
+        'two_factor_expires_at' => 'datetime',
+        'birth_date' => 'date', // NEW
     ];
 
     public function cart()

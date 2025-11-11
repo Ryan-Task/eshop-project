@@ -23,7 +23,9 @@ export default function SuccessPage() {
 
     // Map status Midtrans ke status internal sederhana (fallback: paid bila 200/settlement)
     const mapped =
-      txStatus === "settlement" || txStatus === "capture" || statusCode === "200"
+      txStatus === "settlement" ||
+      txStatus === "capture" ||
+      statusCode === "200"
         ? "paid"
         : txStatus === "pending"
         ? "pending"
@@ -40,7 +42,9 @@ export default function SuccessPage() {
         });
         setUpdateMsg("Status pesanan berhasil diperbarui.");
       } catch (e) {
-        setUpdateMsg("Gagal memperbarui status pesanan. Silakan cek riwayat pesanan.");
+        setUpdateMsg(
+          "Gagal memperbarui status pesanan. Silakan cek riwayat pesanan."
+        );
         // tetap lanjut, hanya info
       } finally {
         setUpdating(false);
@@ -72,7 +76,9 @@ export default function SuccessPage() {
           Terima kasih telah melakukan pembayaran. Pesanan kamu sedang diproses.
         </p>
         {updating ? (
-          <p className="text-gray-500 text-sm mb-6">Memperbarui status pesanan...</p>
+          <p className="text-gray-500 text-sm mb-6">
+            Memperbarui status pesanan...
+          </p>
         ) : (
           updateMsg && <p className="text-gray-600 text-sm mb-6">{updateMsg}</p>
         )}

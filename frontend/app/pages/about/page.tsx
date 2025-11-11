@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, Variants } from "framer-motion";
 import { useRouter } from "next/navigation";
 
 export default function AboutPage() {
@@ -101,7 +101,7 @@ export default function AboutPage() {
   ];
 
   // Animation variants dengan viewport once: false agar animasi muncul tiap scroll
-  const fadeInUp = {
+  const fadeInUp: Variants = {
     hidden: { opacity: 0, y: 60 },
     visible: {
       opacity: 1,
@@ -110,7 +110,7 @@ export default function AboutPage() {
     },
   };
 
-  const staggerContainer = {
+  const staggerContainer: Variants = {
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,

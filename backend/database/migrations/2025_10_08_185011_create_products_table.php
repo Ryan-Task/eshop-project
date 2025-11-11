@@ -14,9 +14,13 @@ return new class extends Migration
             $table->string('type');
             $table->integer('stock')->default(0);
             $table->decimal('price', 15, 2);
-             $table->text('description')->nullable();
-            $table->decimal('harga_modal', 15, 2); // ← kolom baru harga modal
-            $table->string('image')->nullable(); // path gambar
+            $table->text('description')->nullable();
+            $table->decimal('harga_modal', 15, 2);
+            $table->string('image')->nullable();
+            $table->unsignedInteger('rating_count')->default(0);
+            $table->decimal('rating_average', 3, 2)->default(0);
+            $table->unsignedInteger('sold_count')->default(0);
+            $table->boolean('is_archived')->default(false);
             $table->timestamps();
         });
     }
